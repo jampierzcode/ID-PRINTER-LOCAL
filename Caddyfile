@@ -1,0 +1,14 @@
+# Caddyfile para proxy HTTPS a PHP
+{
+    auto_https off
+    admin off
+}
+
+:9443 {
+    tls cert/certificado.pem cert/llave.pem
+    reverse_proxy 127.0.0.1:8080
+    encode gzip
+    log {
+        output file logs/access.log
+    }
+}

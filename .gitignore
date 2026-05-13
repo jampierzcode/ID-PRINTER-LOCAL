@@ -1,0 +1,17 @@
+# Ignorar carpetas de compilación y archivos generados por PyInstaller
+build/
+dist/
+Id-server.spec
+Id-server.py
+
+# Logs generados en runtime
+logs/
+
+# Certificados SSL: se generan en cada PC con mkcert (ver README)
+cert/
+
+# Archivo de entorno con URLs cloud: copiar desde .env.example
+public/nprint/.env
+
+# Basura de macOS
+.DS_Store
