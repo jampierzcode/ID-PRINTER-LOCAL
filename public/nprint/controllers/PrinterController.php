@@ -766,6 +766,153 @@ class PrinterController
      * POST /printers/print-consumo
      * Body: array de objetos { printerName, data }
      */
+    /**
+     * Cuerpo compartido por los 3 tickets de cuenta (consumo / nota de venta /
+     * factura): cabecera del restaurante, bloque de orden, tabla de items,
+     * descuento de orden, TOTAL grande, total en letra y subtotal/IVA. Cada
+     * endpoint le agrega su propio footer (nada, QR de autofactura, o QR +
+     * datos de timbrado).
+     */
+    private function printReceiptBody($printer, array $data, int $W): void
+    {
+        $rest = $data['restaurante'] ?? [];
+        $ord  = $data['orden'] ?? [];
+        $items = $data['items'] ?? [];
+        $tot = $data['totales'] ?? [];
+        $descuentoOrden = $data['descuentoOrden'] ?? null;
+
+        $printer->initialize();
+
+        /* ===== Cabecera Restaurante ===== */
+        $printer->setJustification(Printer::JUSTIFY_CENTER);
+        $printer->setTextSize(2, 2);
+        $printer->setEmphasis(true);
+        $printer->text(($rest['nombre'] ?? '') . "\n");
+        $printer->setEmphasis(false);
+
+        $printer->setTextSize(1, 1);
+        if (!empty($rest['rfc'])) $printer->text($rest['rfc'] . "\n");
+        if (!empty($rest['cp']))  $printer->text("CP " . $rest['cp'] . "\n");
+        if (!empty($rest['direccion'])) $printer->text($rest['direccion'] . "\n");
+        if (!empty($rest['tel'])) $printer->text("TEL: " . $rest['tel'] . "\n");
+
+        $printer->text(str_repeat('=', $W) . "\n");
+
+        /* ===== Bloque Orden ===== */
+        $printer->setJustification(Printer::JUSTIFY_LEFT);
+
+        $printer->text("MESA:" . ($ord['mesa'] ?? '') . "\n");
+        $printer->text("MESERO:" . ($ord['mesero'] ?? '') . "\n");
+
+        $this->printTwoColumnLine(
+            $printer,
+            "PERSONAS:" . (string)($ord['personas'] ?? ''),
+            "ORDEN:" . (string)($ord['orden'] ?? ''),
+            $W
+        );
+
+        $printer->text("FOLIO:" . ($ord['folioSerie'] ?? '') . ' N°:' . ($ord['folioNumber'] ?? '') . "\n");
+
+        if (!empty($ord['fechaCreacion'])) {
+            $printer->text('Fecha Creacion: ' . $ord['fechaCreacion'] . "\n");
+        }
+        if (!empty($ord['fechaImpresion'])) {
+            $printer->text('Fecha Impresión: ' . $ord['fechaImpresion'] . "\n");
+        }
+
+        $printer->text("CAJERO:" . ($ord['cajero'] ?? '') . "\n");
+
+        $printer->text(str_repeat('=', $W) . "\n");
+
+        /* ===== Encabezado Tabla ===== */
+        $printer->setEmphasis(true);
+        $header =
+            str_pad("CANT.", 5) . " " .
+            str_pad("DESCRIPCION", 31) . " " .
+            str_pad("IMPORTE", 10, " ", STR_PAD_LEFT);
+        $printer->text($header . "\n");
+        $printer->setEmphasis(false);
+
+        /* ===== Items ===== */
+        if (!is_array($items) || empty($items)) {
+            $printer->text("Sin items\n");
+        } else {
+            foreach ($items as $it) {
+                if (!is_array($it)) continue;
+
+                $qty  = $it['cantidad'] ?? '';
+                $desc = (string)($it['descripcion'] ?? '');
+                $imp  = $it['importe'] ?? 0;
+
+                // Si es cortesía, marcar en la descripción
+                if (!empty($it['isCourtesy'])) {
+                    $desc = $desc . ' [CORTESIA]';
+                }
+
+                $this->printItemRow($printer, $qty, $desc, $imp, $W);
+
+                // Imprimir línea de descuento por item si aplica
+                $descuento = isset($it['descuento']) ? (float)$it['descuento'] : 0;
+                $descuentoLabel = (string)($it['descuentoLabel'] ?? '');
+                if ($descuento > 0 && $descuentoLabel !== '') {
+                    $discLine = str_pad('', 6) .
+                        str_pad($descuentoLabel, 30) . ' ' .
+                        str_pad('-' . $this->formatMoney($descuento), 10, ' ', STR_PAD_LEFT);
+                    $printer->text($discLine . "\n");
+                }
+            }
+        }
+
+        $printer->text(str_repeat('-', $W) . "\n");
+
+        /* ===== Descuento de orden ===== */
+        if (is_array($descuentoOrden) && ($descuentoOrden['monto'] ?? 0) > 0) {
+            $dTipo = $descuentoOrden['tipo'] ?? '';
+            $dValor = $descuentoOrden['valor'] ?? 0;
+            $dMonto = $descuentoOrden['monto'] ?? 0;
+
+            $dLabel = 'DCTO ORDEN';
+            if ($dTipo === 'percent') {
+                $dLabel = 'DCTO ORDEN (' . $dValor . '%)';
+            }
+
+            $this->printTwoColumnLine(
+                $printer,
+                $dLabel,
+                '-' . $this->formatMoney($dMonto),
+                $W
+            );
+            $printer->text(str_repeat('-', $W) . "\n");
+        }
+
+        /* ===== TOTAL grande ===== */
+        $printer->setJustification(Printer::JUSTIFY_CENTER);
+        $printer->setTextSize(2, 2);
+        $printer->text("TOTAL: " . $this->formatMoney($tot['total'] ?? 0) . "\n");
+        $printer->setTextSize(1, 1);
+        $printer->setJustification(Printer::JUSTIFY_LEFT);
+
+        $printer->text(str_repeat('=', $W) . "\n");
+
+        /* ===== Total en letra ===== */
+        if (!empty($tot['totalEnLetra'])) {
+            $printer->text($tot['totalEnLetra'] . "\n\n");
+        }
+
+        /* ===== Subtotal / IVA ===== */
+        $this->printTwoColumnLine(
+            $printer,
+            "SUBTOTAL:" . $this->formatMoney($tot['subtotal'] ?? 0),
+            "IVA:" . $this->formatMoney($tot['iva'] ?? 0),
+            $W
+        );
+    }
+
+    /**
+     * Ticket de cuenta simple — SIN QR de facturación. Se imprime al
+     * comandar/imprimir cuenta, antes de cobrar. La invitación a facturar
+     * vive ahora solo en la nota de venta (print-nota-venta), al cobrar.
+     */
     public function printConsumo(Request $request, Response $response, $args = [])
     {
         try {
@@ -810,180 +957,9 @@ class PrinterController
                 try {
                     $connector = new WindowsPrintConnector($printerName);
                     $printer = new Printer($connector);
-
                     $W = 48; // ancho 80mm típico
 
-                    $rest = $data['restaurante'] ?? [];
-                    $ord  = $data['orden'] ?? [];
-                    $items = $data['items'] ?? [];
-                    $tot = $data['totales'] ?? [];
-                    $descuentoOrden = $data['descuentoOrden'] ?? null;
-
-                    $printer->initialize();
-
-                    /* ===== Cabecera Restaurante ===== */
-                    $printer->setJustification(Printer::JUSTIFY_CENTER);
-                    $printer->setTextSize(2, 2);
-                    $printer->setEmphasis(true);
-                    $printer->text(($rest['nombre'] ?? '') . "\n");
-                    $printer->setEmphasis(false);
-
-                    $printer->setTextSize(1, 1);
-                    if (!empty($rest['rfc'])) $printer->text($rest['rfc'] . "\n");
-                    if (!empty($rest['cp']))  $printer->text("CP " . $rest['cp'] . "\n");
-                    if (!empty($rest['direccion'])) $printer->text($rest['direccion'] . "\n");
-                    if (!empty($rest['tel'])) $printer->text("TEL: " . $rest['tel'] . "\n");
-
-                    $printer->text(str_repeat('=', $W) . "\n");
-
-                    /* ===== Bloque Orden ===== */
-                    $printer->setJustification(Printer::JUSTIFY_LEFT);
-
-                    $printer->text("MESA:" . ($ord['mesa'] ?? '') . "\n");
-                    $printer->text("MESERO:" . ($ord['mesero'] ?? '') . "\n");
-
-                    $this->printTwoColumnLine(
-                        $printer,
-                        "PERSONAS:" . (string)($ord['personas'] ?? ''),
-                        "ORDEN:" . (string)($ord['orden'] ?? ''),
-                        $W
-                    );
-
-                    $printer->text("FOLIO:" . ($ord['folioSerie'] ?? '') . ' N°:' . ($ord['folioNumber'] ?? '') . "\n");
-
-                    if (!empty($ord['fechaCreacion'])) {
-                        $printer->text('Fecha Creacion: ' . $ord['fechaCreacion'] . "\n");
-                    }
-                    if (!empty($ord['fechaImpresion'])) {
-                        $printer->text('Fecha Impresión: ' . $ord['fechaImpresion'] . "\n");
-                    }
-
-                    $printer->text("CAJERO:" . ($ord['cajero'] ?? '') . "\n");
-
-                    $printer->text(str_repeat('=', $W) . "\n");
-
-                    /* ===== Encabezado Tabla ===== */
-                    $printer->setEmphasis(true);
-                    $header =
-                        str_pad("CANT.", 5) . " " .
-                        str_pad("DESCRIPCION", 31) . " " .
-                        str_pad("IMPORTE", 10, " ", STR_PAD_LEFT);
-                    $printer->text($header . "\n");
-                    $printer->setEmphasis(false);
-
-                    /* ===== Items ===== */
-                    if (!is_array($items) || empty($items)) {
-                        $printer->text("Sin items\n");
-                    } else {
-                        foreach ($items as $it) {
-                            if (!is_array($it)) continue;
-
-                            $qty  = $it['cantidad'] ?? '';
-                            $desc = (string)($it['descripcion'] ?? '');
-                            $imp  = $it['importe'] ?? 0;
-
-                            // Si es cortesía, marcar en la descripción
-                            if (!empty($it['isCourtesy'])) {
-                                $desc = $desc . ' [CORTESIA]';
-                            }
-
-                            $this->printItemRow($printer, $qty, $desc, $imp, $W);
-
-                            // Imprimir línea de descuento por item si aplica
-                            $descuento = isset($it['descuento']) ? (float)$it['descuento'] : 0;
-                            $descuentoLabel = (string)($it['descuentoLabel'] ?? '');
-                            if ($descuento > 0 && $descuentoLabel !== '') {
-                                $discLine = str_pad('', 6) .
-                                    str_pad($descuentoLabel, 30) . ' ' .
-                                    str_pad('-' . $this->formatMoney($descuento), 10, ' ', STR_PAD_LEFT);
-                                $printer->text($discLine . "\n");
-                            }
-                        }
-                    }
-
-                    $printer->text(str_repeat('-', $W) . "\n");
-
-                    /* ===== Descuento de orden ===== */
-                    if (is_array($descuentoOrden) && ($descuentoOrden['monto'] ?? 0) > 0) {
-                        $dTipo = $descuentoOrden['tipo'] ?? '';
-                        $dValor = $descuentoOrden['valor'] ?? 0;
-                        $dMonto = $descuentoOrden['monto'] ?? 0;
-
-                        $dLabel = 'DCTO ORDEN';
-                        if ($dTipo === 'percent') {
-                            $dLabel = 'DCTO ORDEN (' . $dValor . '%)';
-                        }
-
-                        $this->printTwoColumnLine(
-                            $printer,
-                            $dLabel,
-                            '-' . $this->formatMoney($dMonto),
-                            $W
-                        );
-                        $printer->text(str_repeat('-', $W) . "\n");
-                    }
-
-                    /* ===== TOTAL grande ===== */
-                    $printer->setJustification(Printer::JUSTIFY_CENTER);
-                    $printer->setTextSize(2, 2);
-                    $printer->text("TOTAL: " . $this->formatMoney($tot['total'] ?? 0) . "\n");
-                    $printer->setTextSize(1, 1);
-                    $printer->setJustification(Printer::JUSTIFY_LEFT);
-
-                    $printer->text(str_repeat('=', $W) . "\n");
-
-                    /* ===== Total en letra ===== */
-                    if (!empty($tot['totalEnLetra'])) {
-                        $printer->text($tot['totalEnLetra'] . "\n\n");
-                    }
-
-                    /* ===== Subtotal / IVA ===== */
-                    $this->printTwoColumnLine(
-                        $printer,
-                        "SUBTOTAL:" . $this->formatMoney($tot['subtotal'] ?? 0),
-                        "IVA:" . $this->formatMoney($tot['iva'] ?? 0),
-                        $W
-                    );
-                    $facturarUrl = $this->buildFacturarUrl($job['restaurantId']);
-
-                    $printer->setJustification(Printer::JUSTIFY_CENTER);
-
-                    $printer->feed(1);
-                    // 1) Aviso fiscal (en negrita)
-                    $printer->setEmphasis(true);
-                    $printer->text("ESTO NO ES UN COMPROBANTE FISCAL\n");
-
-
-
-                    // Dos espacios abajo (dos líneas)
-                    $printer->feed(2);
-
-                    // 3) Mensaje principal (negrita y mayúsculas)
-                    $printer->setEmphasis(true);
-                    $printer->text("ESCANEA EL SIGUIENTE CODIGO QR\n");
-                    $printer->text("PARA PODER EMITIR TU FACTURA\n");
-                    $printer->text("ELECTRONICA\n");
-                    $printer->setEmphasis(false);
-
-                    // Separación antes del QR (una línea)
-                    $printer->feed(1);
-
-                    // 4) QR
-                    if (!empty($facturarUrl)) {
-                        $printer->qrCode($facturarUrl, Printer::QR_ECLEVEL_M, 6, Printer::QR_MODEL_2);
-                        $printer->feed(1);
-                    }
-
-
-                    // Espacio extra (una línea)
-                    $printer->feed(1);
-                    $printer->setEmphasis(false);
-
-                    // 2) Dos espacios abajo: POS GROWTHSUITE
-                    $printer->text("POS GROWTHSUITE\n");
-
-
-                    $printer->setJustification(Printer::JUSTIFY_LEFT);
+                    $this->printReceiptBody($printer, $data, $W);
 
                     $printer->feed(3);
                     $printer->cut();
@@ -994,7 +970,6 @@ class PrinterController
                         'success' => 1,
                         'message' => 'Ticket CONSUMO impreso correctamente en ' . $printerName,
                         'printer_name' => $printerName,
-                        'factura_url' => $facturarUrl,
                         'template' => 'consumo_ticket',
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
@@ -1005,6 +980,235 @@ class PrinterController
                         'printer_name' => $printerName,
                         'error_type' => 'general'
                     ];
+                } finally {
+                    if ($printer && !$printerClosed) {
+                        try {
+                            $printer->close();
+                        } catch (Exception $inner) {
+                        }
+                    }
+                }
+            }
+
+            $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
+            return $response->withHeader('Content-Type', 'application/json');
+        } catch (Exception $e) {
+            $response->getBody()->write(json_encode([
+                'success' => 0,
+                'message' => 'Error al procesar el request: ' . $e->getMessage()
+            ], JSON_UNESCAPED_UNICODE));
+            return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
+        }
+    }
+
+    /**
+     * Nota de venta — se imprime AL COBRAR cuando el cliente no pidió factura
+     * en el momento. Mismo cuerpo que el ticket + QR de autofactura futura,
+     * con el mensaje de cuántos días tiene para pedirla (data.diasParaFacturar).
+     */
+    public function printNotaVenta(Request $request, Response $response, $args = [])
+    {
+        try {
+            $jobs = $request->getParsedBody();
+            if (!is_array($jobs)) {
+                $rawBody = (string) $request->getBody();
+                $jobs = json_decode($rawBody, true);
+            }
+            if (!is_array($jobs)) {
+                $response->getBody()->write(json_encode([
+                    'success' => 0,
+                    'message' => 'El cuerpo debe ser un array JSON válido.'
+                ], JSON_UNESCAPED_UNICODE));
+                return $response->withHeader('Content-Type', 'application/json');
+            }
+
+            $results = [];
+            foreach ($jobs as $job) {
+                $printerName = $job['printerName'] ?? null;
+                $data = $job['data'] ?? [];
+
+                if (!$printerName) {
+                    $results[] = ['success' => 0, 'message' => 'Nombre de impresora es requerido', 'printer_name' => $printerName];
+                    continue;
+                }
+                if (!is_array($data)) {
+                    $results[] = ['success' => 0, 'message' => 'El campo data debe ser un objeto', 'printer_name' => $printerName];
+                    continue;
+                }
+
+                $printer = null;
+                $printerClosed = false;
+
+                try {
+                    $connector = new WindowsPrintConnector($printerName);
+                    $printer = new Printer($connector);
+                    $W = 48;
+
+                    $this->printReceiptBody($printer, $data, $W);
+
+                    $facturarUrl = $this->buildFacturarUrl($job['restaurantId'] ?? null);
+                    $diasParaFacturar = $data['diasParaFacturar'] ?? null;
+
+                    $printer->setJustification(Printer::JUSTIFY_CENTER);
+                    $printer->feed(1);
+
+                    $printer->setEmphasis(true);
+                    $printer->text("ESTO NO ES UN COMPROBANTE FISCAL\n");
+                    $printer->feed(2);
+
+                    $printer->text("ESCANEA EL SIGUIENTE CODIGO QR\n");
+                    $printer->text("PARA PODER EMITIR TU FACTURA\n");
+                    $printer->text("ELECTRONICA\n");
+                    $printer->setEmphasis(false);
+
+                    if (!empty($diasParaFacturar)) {
+                        $printer->feed(1);
+                        $printer->setEmphasis(true);
+                        $printer->text("TIENES " . (int)$diasParaFacturar . " DIAS PARA FACTURAR\n");
+                        $printer->setEmphasis(false);
+                    }
+
+                    $printer->feed(1);
+                    if (!empty($facturarUrl)) {
+                        $printer->qrCode($facturarUrl, Printer::QR_ECLEVEL_M, 6, Printer::QR_MODEL_2);
+                        $printer->feed(1);
+                    }
+
+                    $printer->feed(1);
+                    $printer->text("POS GROWTHSUITE\n");
+                    $printer->setJustification(Printer::JUSTIFY_LEFT);
+
+                    $printer->feed(3);
+                    $printer->cut();
+                    $printer->close();
+                    $printerClosed = true;
+
+                    $results[] = [
+                        'success' => 1,
+                        'message' => 'Nota de venta impresa correctamente en ' . $printerName,
+                        'printer_name' => $printerName,
+                        'factura_url' => $facturarUrl,
+                        'template' => 'nota_venta_ticket',
+                        'timestamp' => date('Y-m-d H:i:s')
+                    ];
+                } catch (Exception $e) {
+                    $results[] = ['success' => 0, 'message' => 'Error al imprimir: ' . $e->getMessage(), 'printer_name' => $printerName, 'error_type' => 'general'];
+                } finally {
+                    if ($printer && !$printerClosed) {
+                        try {
+                            $printer->close();
+                        } catch (Exception $inner) {
+                        }
+                    }
+                }
+            }
+
+            $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
+            return $response->withHeader('Content-Type', 'application/json');
+        } catch (Exception $e) {
+            $response->getBody()->write(json_encode([
+                'success' => 0,
+                'message' => 'Error al procesar el request: ' . $e->getMessage()
+            ], JSON_UNESCAPED_UNICODE));
+            return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
+        }
+    }
+
+    /**
+     * Comprobante de factura YA generada — se imprime al cobrar cuando el
+     * cliente sí pidió factura y Facturapi la timbró con éxito. Mismo cuerpo
+     * + nombre/RFC del cliente, datos de timbrado (serie/folio propio + UUID)
+     * y un QR que apunta al PDF ya generado (no a crear una nueva).
+     * Espera en data.factura: { legalName, taxId, series, folioNumber, uuid, pdfUrl }
+     */
+    public function printFactura(Request $request, Response $response, $args = [])
+    {
+        try {
+            $jobs = $request->getParsedBody();
+            if (!is_array($jobs)) {
+                $rawBody = (string) $request->getBody();
+                $jobs = json_decode($rawBody, true);
+            }
+            if (!is_array($jobs)) {
+                $response->getBody()->write(json_encode([
+                    'success' => 0,
+                    'message' => 'El cuerpo debe ser un array JSON válido.'
+                ], JSON_UNESCAPED_UNICODE));
+                return $response->withHeader('Content-Type', 'application/json');
+            }
+
+            $results = [];
+            foreach ($jobs as $job) {
+                $printerName = $job['printerName'] ?? null;
+                $data = $job['data'] ?? [];
+
+                if (!$printerName) {
+                    $results[] = ['success' => 0, 'message' => 'Nombre de impresora es requerido', 'printer_name' => $printerName];
+                    continue;
+                }
+                if (!is_array($data)) {
+                    $results[] = ['success' => 0, 'message' => 'El campo data debe ser un objeto', 'printer_name' => $printerName];
+                    continue;
+                }
+
+                $printer = null;
+                $printerClosed = false;
+
+                try {
+                    $connector = new WindowsPrintConnector($printerName);
+                    $printer = new Printer($connector);
+                    $W = 48;
+
+                    $this->printReceiptBody($printer, $data, $W);
+
+                    $fac = $data['factura'] ?? [];
+                    $pdfUrl = $fac['pdfUrl'] ?? null;
+
+                    $printer->setJustification(Printer::JUSTIFY_CENTER);
+                    $printer->feed(1);
+
+                    $printer->setEmphasis(true);
+                    $printer->text("FACTURA ELECTRONICA (CFDI)\n");
+                    $printer->setEmphasis(false);
+                    $printer->feed(1);
+
+                    $printer->setJustification(Printer::JUSTIFY_LEFT);
+                    if (!empty($fac['legalName'])) $printer->text("FACTURADO A: " . $fac['legalName'] . "\n");
+                    if (!empty($fac['taxId'])) $printer->text("RFC: " . $fac['taxId'] . "\n");
+                    if (!empty($fac['series']) || !empty($fac['folioNumber'])) {
+                        $printer->text("SERIE-FOLIO: " . ($fac['series'] ?? '') . '-' . ($fac['folioNumber'] ?? '') . "\n");
+                    }
+                    if (!empty($fac['uuid'])) $printer->text("UUID: " . $fac['uuid'] . "\n");
+
+                    $printer->setJustification(Printer::JUSTIFY_CENTER);
+                    $printer->feed(1);
+
+                    if (!empty($pdfUrl)) {
+                        $printer->text("ESCANEA PARA VER TU FACTURA\n");
+                        $printer->feed(1);
+                        $printer->qrCode($pdfUrl, Printer::QR_ECLEVEL_M, 6, Printer::QR_MODEL_2);
+                        $printer->feed(1);
+                    }
+
+                    $printer->feed(1);
+                    $printer->text("POS GROWTHSUITE\n");
+                    $printer->setJustification(Printer::JUSTIFY_LEFT);
+
+                    $printer->feed(3);
+                    $printer->cut();
+                    $printer->close();
+                    $printerClosed = true;
+
+                    $results[] = [
+                        'success' => 1,
+                        'message' => 'Factura impresa correctamente en ' . $printerName,
+                        'printer_name' => $printerName,
+                        'pdf_url' => $pdfUrl,
+                        'template' => 'factura_ticket',
+                        'timestamp' => date('Y-m-d H:i:s')
+                    ];
+                } catch (Exception $e) {
+                    $results[] = ['success' => 0, 'message' => 'Error al imprimir: ' . $e->getMessage(), 'printer_name' => $printerName, 'error_type' => 'general'];
                 } finally {
                     if ($printer && !$printerClosed) {
                         try {

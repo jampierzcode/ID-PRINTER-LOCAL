@@ -61,6 +61,8 @@ $app->group('/printers', function ($group) {
     $group->post('/print-propinas', [PrinterController::class, 'printPropinas']);
     $group->post('/print-movtos', [PrinterController::class, 'printMovtos']);
     $group->post('/print-consumo', [PrinterController::class, 'printConsumo']);
+    $group->post('/print-nota-venta', [PrinterController::class, 'printNotaVenta']);
+    $group->post('/print-factura', [PrinterController::class, 'printFactura']);
     $group->post('/print-split-preview', [PrinterController::class, 'printSplitPreview']);
     $group->post('/print-split-final', [PrinterController::class, 'printSplitFinal']);
 });
