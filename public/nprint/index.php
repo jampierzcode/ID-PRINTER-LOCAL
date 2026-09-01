@@ -7,9 +7,14 @@ use App\Controllers\PrinterController;
 use App\Controllers\TemplateController;
 use App\Controllers\HelloController;
 use App\Controllers\FingerprintController;
+use App\Support\Timezone;
 
 
 require 'vendor/autoload.php';
+
+// Toma la zona horaria del propio Windows de esta PC (la misma que usa el
+// reloj del sistema), en vez de fijar una sola para todos los restaurantes.
+Timezone::applyFromSystem();
 
 $app = AppFactory::create();
 $app->addBodyParsingMiddleware();
