@@ -8,7 +8,8 @@ Id-server.py
 logs/
 
 # Certificados SSL: se generan en cada PC con mkcert (ver README)
-cert/
+# (anclado a la raíz para no atrapar también php/cert/, que sí va versionado)
+/cert/
 
 # Archivo de entorno con URLs cloud: copiar desde .env.example
 public/nprint/.env
