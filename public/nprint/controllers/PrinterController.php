@@ -349,6 +349,7 @@ class PrinterController
                     $printer->text("Area: " . ($data['areaName'] ?? '') . "\n");
                     $printer->text("Mesa: " . ($data['tableName'] ?? '') . "\n");
                     $printer->text("Orden: " . ($data['orderId'] ?? '') . "\n");
+                    $printer->text("Fecha: " . date('d/m/Y H:i:s') . "\n");
                     $printer->text(str_repeat('-', 48) . "\n");
                     $printer->text("Pedidos: \n");
 
