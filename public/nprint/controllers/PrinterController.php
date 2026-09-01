@@ -475,6 +475,96 @@ class PrinterController
         }
     }
     /**
+     * Abre el cajón de dinero (gaveta) conectado por cable RJ11 a la
+     * impresora indicada, enviando el pulso ESC/POS estándar de apertura
+     * (comando "kick-out drawer"). Se usa, por ejemplo, al querer cobrar.
+     * POST /printers/open-drawer
+     * Body: { printerName, pin?, onMs?, offMs? } o un array de esos objetos
+     * para abrir varias gavetas en un mismo request.
+     *   - pin: 0 o 1, según a qué pin del conector RJ11 esté cableada la
+     *     gaveta (0 = pin 2, el más común; 1 = pin 5). Default 0.
+     *   - onMs / offMs: duración del pulso en milisegundos. Default 120/240,
+     *     los valores estándar que soportan la mayoría de gavetas.
+     */
+    public function openDrawer(Request $request, Response $response, $args = [])
+    {
+        try {
+            $jobs = $request->getParsedBody();
+            if (!is_array($jobs)) {
+                $rawBody = (string) $request->getBody();
+                $jobs = json_decode($rawBody, true);
+            }
+            if (isset($jobs['printerName'])) {
+                $jobs = [$jobs];
+            }
+            if (!is_array($jobs)) {
+                $response->getBody()->write(json_encode([
+                    'success' => 0,
+                    'message' => 'El cuerpo debe ser un array JSON válido.'
+                ], JSON_UNESCAPED_UNICODE));
+                return $response->withHeader('Content-Type', 'application/json');
+            }
+
+            $results = [];
+            foreach ($jobs as $job) {
+                $printerName = $job['printerName'] ?? null;
+                $pin = (int) ($job['pin'] ?? 0);
+                $onMs = (int) ($job['onMs'] ?? 120);
+                $offMs = (int) ($job['offMs'] ?? 240);
+
+                if (!$printerName) {
+                    $results[] = [
+                        'success' => 0,
+                        'message' => 'Nombre de impresora es requerido',
+                        'printer_name' => $printerName
+                    ];
+                    continue;
+                }
+
+                $printer = null;
+                $printerClosed = false;
+                try {
+                    $connector = new WindowsPrintConnector($printerName);
+                    $printer = new Printer($connector);
+                    $printer->pulse($pin, $onMs, $offMs);
+                    $printer->close();
+                    $printerClosed = true;
+
+                    $results[] = [
+                        'success' => 1,
+                        'message' => 'Cajón de dinero abierto correctamente en ' . $printerName,
+                        'printer_name' => $printerName,
+                        'timestamp' => date('Y-m-d H:i:s')
+                    ];
+                } catch (Exception $e) {
+                    $results[] = [
+                        'success' => 0,
+                        'message' => 'Error al abrir el cajón: ' . $e->getMessage(),
+                        'printer_name' => $printerName
+                    ];
+                } finally {
+                    if ($printer && !$printerClosed) {
+                        try {
+                            $printer->close();
+                        } catch (Exception $inner) {
+                            // Intencionalmente silencioso para no interrumpir la respuesta
+                        }
+                    }
+                }
+            }
+
+            $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
+            return $response->withHeader('Content-Type', 'application/json');
+        } catch (Exception $e) {
+            $response->getBody()->write(json_encode([
+                'success' => 0,
+                'message' => 'Error al procesar el request: ' . $e->getMessage()
+            ], JSON_UNESCAPED_UNICODE));
+            return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
+        }
+    }
+
+    /**
      * Imprime el resumen de pagos de propinas por mesero.
      * POST /printers/print-propinas
      */
