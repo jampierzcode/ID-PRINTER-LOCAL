@@ -343,14 +343,14 @@ class PrinterController
                     $printer->setTextSize(2, 2);
                     $printer->text("COMANDA TICKET\n");
                     $printer->feed(1);
-                    $printer->setTextSize(1, 1); // fuente pequeña (≈ tamaño 8) para contenidos
+                    $printer->setTextSize(2, 2); // letra grande para que se lea bien en cocina
                     $printer->setJustification(Printer::JUSTIFY_LEFT);
 
                     $printer->text("Area: " . ($data['areaName'] ?? '') . "\n");
                     $printer->text("Mesa: " . ($data['tableName'] ?? '') . "\n");
                     $printer->text("Orden: " . ($data['orderId'] ?? '') . "\n");
                     $printer->text("Fecha: " . date('d/m/Y H:i:s') . "\n");
-                    $printer->text(str_repeat('-', 48) . "\n");
+                    $printer->text(str_repeat('-', 24) . "\n");
                     $printer->text("Pedidos: \n");
 
                     $rawItems = $data['items'] ?? [];
@@ -386,7 +386,7 @@ class PrinterController
                         });
 
                         foreach ($mainItems as $item) {
-                            $printer->text(str_repeat('-', 48) . "\n");
+                            $printer->text(str_repeat('-', 24) . "\n");
 
                             $courseLabel = $this->formatCourseLabel($item['course'] ?? null);
                             if ($courseLabel !== '') {
