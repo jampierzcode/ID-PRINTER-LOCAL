@@ -853,6 +853,300 @@ class PrinterController
     }
 
     /**
+     * Imprime el CORTE DE CAJA X / CIERRE DE TURNO vía ESC/POS crudo (misma
+     * fuente nítida de la impresora que usan consumo/propinas/comanda) en vez
+     * del diálogo de impresión del navegador — ese camino rasterizaba el HTML
+     * y salía con letra borrosa, además de depender de @page/driver para el
+     * largo del papel (bug reportado 2026-09-02/03).
+     * POST /printers/print-corte-x
+     * Body: array de objetos { printerName, data } — `data` es casi 1:1 el
+     * mismo shape que ya devuelve /shifts/:id/xcut en el front (ver
+     * XCutReport en pos_admin_front/pos_cash_front, lib/xcutHtmlBuilders.ts).
+     */
+    public function printCorteX(Request $request, Response $response, $args = [])
+    {
+        try {
+            $jobs = $request->getParsedBody();
+            if (!is_array($jobs)) {
+                $rawBody = (string) $request->getBody();
+                $jobs = json_decode($rawBody, true);
+            }
+            if (isset($jobs['printerName']) && isset($jobs['data'])) {
+                $jobs = [$jobs];
+            }
+            if (!is_array($jobs)) {
+                $response->getBody()->write(json_encode([
+                    'success' => 0,
+                    'message' => 'El cuerpo debe ser un array JSON válido.'
+                ], JSON_UNESCAPED_UNICODE));
+                return $response->withHeader('Content-Type', 'application/json');
+            }
+
+            $results = [];
+            foreach ($jobs as $job) {
+                $printerName = $job['printerName'] ?? null;
+                $data = $job['data'] ?? [];
+
+                if (!$printerName) {
+                    $results[] = [
+                        'success' => 0,
+                        'message' => 'Nombre de impresora es requerido',
+                        'printer_name' => $printerName
+                    ];
+                    continue;
+                }
+                if (!is_array($data)) {
+                    $results[] = [
+                        'success' => 0,
+                        'message' => 'El campo data debe ser un objeto',
+                        'printer_name' => $printerName
+                    ];
+                    continue;
+                }
+
+                $printer = null;
+                $printerClosed = false;
+                try {
+                    $connector = new WindowsPrintConnector($printerName);
+                    $printer = new Printer($connector);
+                    $printer->initialize();
+
+                    $this->printCorteXBody($printer, $data);
+
+                    $printer->feed(3);
+                    $printer->cut();
+                    $printer->close();
+                    $printerClosed = true;
+
+                    $results[] = [
+                        'success' => 1,
+                        'message' => 'Corte de caja X impreso correctamente en ' . $printerName,
+                        'printer_name' => $printerName,
+                        'template' => 'corte_x',
+                        'timestamp' => date('Y-m-d H:i:s')
+                    ];
+                } catch (Exception $e) {
+                    $results[] = [
+                        'success' => 0,
+                        'message' => 'Error al imprimir: ' . $e->getMessage(),
+                        'printer_name' => $printerName,
+                        'error_type' => 'general'
+                    ];
+                } finally {
+                    if ($printer && !$printerClosed) {
+                        try {
+                            $printer->close();
+                        } catch (Exception $inner) {
+                        }
+                    }
+                }
+            }
+
+            $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
+            return $response->withHeader('Content-Type', 'application/json');
+        } catch (Exception $e) {
+            $response->getBody()->write(json_encode([
+                'success' => 0,
+                'message' => 'Error al procesar el request: ' . $e->getMessage()
+            ], JSON_UNESCAPED_UNICODE));
+            return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
+        }
+    }
+
+    /**
+     * Cuerpo del corte X — mismas secciones/orden que buildPrintHtml() en
+     * xcutHtmlBuilders.ts (admin y cash), solo que en ESC/POS en vez de HTML.
+     */
+    private function printCorteXBody($printer, array $data, int $W = 48): void
+    {
+        $money = function ($v) {
+            return $this->formatMoney($v ?? 0);
+        };
+        $div = function () use ($printer, $W) {
+            $printer->text(str_repeat('-', $W) . "\n");
+        };
+        $sectionTitle = function (string $title) use ($printer) {
+            $printer->setEmphasis(true);
+            $printer->text($title . "\n");
+            $printer->setEmphasis(false);
+        };
+
+        $company = $data['company'] ?? [];
+        $shift = $data['shift'] ?? [];
+        $summary = $data['summary'] ?? [];
+        $totals = $data['totals'] ?? [];
+        $declarations = $data['declarations'] ?? [];
+        $salesByMethod = $data['salesByMethod'] ?? [];
+        $tipsByMethod = $data['tipsByMethod'] ?? [];
+        $byCategory = $data['byCategory'] ?? [];
+        $byService = $data['byService'] ?? [];
+        $courtesyByCategory = $data['courtesyByCategory'] ?? [];
+        $discountByCategory = $data['discountByCategory'] ?? [];
+
+        $fmtDT = function ($iso) {
+            if (!$iso) return '';
+            try {
+                $dt = new DateTime($iso);
+                return $dt->format('Y-m-d H:i');
+            } catch (Exception $e) {
+                return (string) $iso;
+            }
+        };
+
+        // ── Cabecera ──
+        $printer->setJustification(Printer::JUSTIFY_CENTER);
+        $printer->setEmphasis(true);
+        $printer->text(($company['name'] ?? '') . "\n");
+        $printer->setEmphasis(false);
+        if (!empty($company['rfc'])) $printer->text($company['rfc'] . "\n");
+        if (!empty($company['address'])) $printer->text($company['address'] . "\n");
+        $printer->setTextSize(1, 2);
+        $printer->setEmphasis(true);
+        $printer->text("CORTE DE CAJA X\n");
+        $printer->setEmphasis(false);
+        $printer->setTextSize(1, 1);
+        $printer->text("DEL " . $fmtDT($shift['openedAt'] ?? null) . "\n");
+        $printer->text("AL  " . $fmtDT($shift['closedAt'] ?? null) . "\n");
+        $turnoLine = "TURNO: " . ($shift['id'] ?? '');
+        if (!empty($shift['stationName'])) $turnoLine .= " · ESTACIÓN: " . $shift['stationName'];
+        $printer->text($turnoLine . "\n");
+        if (!empty($summary['cashierNames'])) {
+            $printer->text("CAJERO: " . implode(', ', $summary['cashierNames']) . "\n");
+        }
+        $printer->setJustification(Printer::JUSTIFY_LEFT);
+        $div();
+
+        // ── CAJA ──
+        $sectionTitle('CAJA');
+        $this->printTwoColumnLine($printer, '+EFECTIVO INIC', $money($data['openingCash'] ?? 0), $W);
+        foreach ($salesByMethod as $m) {
+            $this->printTwoColumnLine($printer, '+VENTA ' . strtoupper($m['name'] ?? ''), $money($m['salesAmount'] ?? 0), $W);
+        }
+        foreach ($tipsByMethod as $m) {
+            $this->printTwoColumnLine($printer, '+PROP. ' . strtoupper($m['name'] ?? ''), $money($m['tipAmount'] ?? 0), $W);
+        }
+        $this->printTwoColumnLine($printer, '+DEPÓSITOS EFE', $money($data['cashDeposits'] ?? 0), $W);
+        $this->printTwoColumnLine($printer, '-PROPINAS PAGA', $money($data['tipsPaid'] ?? 0), $W);
+        $this->printTwoColumnLine($printer, '-COMISIONES PA', $money($data['commissionsPaid'] ?? 0), $W);
+        $this->printTwoColumnLine($printer, '-RETIROS EFECT', $money($data['cashWithdrawals'] ?? 0), $W);
+        $div();
+        $saldoFinal = $data['saldoFinal'] ?? $data['finalBalance'] ?? 0;
+        $cashFinal = $data['cashFinal'] ?? $data['finalBalance'] ?? 0;
+        $printer->setEmphasis(true);
+        $this->printTwoColumnLine($printer, '=SALDO FINAL', $money($saldoFinal), $W);
+        $this->printTwoColumnLine($printer, 'EFECTIVO FINA', $money($cashFinal), $W);
+        $printer->setEmphasis(false);
+
+        // ── Formas de pago ──
+        $sectionTitle('FORMA DE PAGO VENTAS');
+        $totalSalesForms = 0;
+        foreach ($salesByMethod as $m) {
+            $this->printTwoColumnLine($printer, $m['name'] ?? '', $money($m['salesAmount'] ?? 0), $W);
+            $totalSalesForms += (float) ($m['salesAmount'] ?? 0);
+        }
+        $printer->setEmphasis(true);
+        $this->printTwoColumnLine($printer, 'TOTAL FORMAS', $money($totalSalesForms), $W);
+        $printer->setEmphasis(false);
+        $div();
+
+        $sectionTitle('FORMA DE PAGO PROPINA');
+        $totalTipsForms = 0;
+        foreach ($tipsByMethod as $m) {
+            $this->printTwoColumnLine($printer, $m['name'] ?? '', $money($m['tipAmount'] ?? 0), $W);
+            $totalTipsForms += (float) ($m['tipAmount'] ?? 0);
+        }
+        $printer->setEmphasis(true);
+        $this->printTwoColumnLine($printer, 'TOTAL FORMAS PROPINA', $money($totalTipsForms), $W);
+        $printer->setEmphasis(false);
+        $div();
+
+        // ── Venta por tipo/servicio ──
+        $sectionTitle('VENTA (NO INCLUYE IMPUESTOS)');
+        $sectionTitle('POR TIPO DE PRODUCTO');
+        foreach ($byCategory as $c) {
+            $pct = round(($c['pct'] ?? 0) * 100);
+            $this->printTwoColumnLine(
+                $printer,
+                ($c['name'] ?? ''),
+                $money($c['salesAmount'] ?? 0) . " ({$pct}%) " . ($c['salesCount'] ?? 0),
+                $W
+            );
+        }
+        $sectionTitle('POR TIPO DE SERVICIO');
+        foreach ($byService as $s) {
+            $pct = round(($s['pct'] ?? 0) * 100);
+            $this->printTwoColumnLine($printer, ($s['name'] ?? ''), $money($s['salesAmount'] ?? 0) . " ({$pct}%)", $W);
+        }
+        $div();
+
+        // ── Totales fiscales ──
+        if (isset($totals['subtotal'])) $this->printTwoColumnLine($printer, 'SUBTOTAL', $money($totals['subtotal']), $W);
+        if (isset($totals['discounts'])) $this->printTwoColumnLine($printer, '-DESCUENTOS', $money($totals['discounts']), $W);
+        if (isset($totals['net'])) $this->printTwoColumnLine($printer, 'VENTA NETA', $money($totals['net']), $W);
+        $div();
+        foreach (($totals['taxes'] ?? []) as $t) {
+            $this->printTwoColumnLine($printer, 'VENTA GRAVADA AL ' . ($t['rateLabel'] ?? ''), $money($t['base'] ?? 0), $W);
+            $this->printTwoColumnLine($printer, 'IVA ' . ($t['rateLabel'] ?? ''), $money($t['tax'] ?? 0), $W);
+        }
+        if (isset($totals['taxesTotal'])) $this->printTwoColumnLine($printer, 'TOTAL DE IMPUESTOS', $money($totals['taxesTotal']), $W);
+        $div();
+        if (isset($totals['gross'])) {
+            $printer->setEmphasis(true);
+            $this->printTwoColumnLine($printer, 'TOTAL CON IMP.', $money($totals['gross']), $W);
+            $printer->setEmphasis(false);
+        }
+        $div();
+
+        // ── Resumen de cuentas ──
+        $sectionTitle('RESUMEN CUENTAS');
+        $this->printTwoColumnLine($printer, 'CUENTAS NORMALES', (string) ($summary['closedCount'] ?? 0), $W);
+        $this->printTwoColumnLine($printer, 'CUENTAS CANCELADAS', (string) ($summary['voidCount'] ?? 0), $W);
+        $this->printTwoColumnLine($printer, 'CUENTAS CON DESCUENTO', (string) ($summary['discountCount'] ?? 0), $W);
+        $this->printTwoColumnLine($printer, 'CUENTAS CON CORTESIA', (string) ($summary['courtesyCount'] ?? 0), $W);
+        $this->printTwoColumnLine($printer, 'CUENTA PROMEDIO', $money($summary['avgTicket'] ?? 0), $W);
+        $this->printTwoColumnLine($printer, 'CONSUMO PROMEDIO', $money($summary['avgConsumption'] ?? 0), $W);
+        $this->printTwoColumnLine($printer, 'COMENSALES', (string) ($summary['guests'] ?? 0), $W);
+        $this->printTwoColumnLine($printer, 'PROPINAS', $money($summary['tipsTotal'] ?? 0), $W);
+        if (!empty($summary['folioFrom'])) $this->printTwoColumnLine($printer, 'FOLIO INICIAL', (string) $summary['folioFrom'], $W);
+        if (!empty($summary['folioTo'])) $this->printTwoColumnLine($printer, 'FOLIO FINAL', (string) $summary['folioTo'], $W);
+        $div();
+
+        // ── Cortesías / descuentos ──
+        $sectionTitle('CORTESIAS POR CATEGORIA');
+        foreach ($courtesyByCategory as $c) {
+            $this->printTwoColumnLine($printer, $c['name'] ?? '', $money($c['amount'] ?? 0), $W);
+        }
+        $printer->setEmphasis(true);
+        $this->printTwoColumnLine($printer, 'TOTAL CORTESIAS', $money($summary['totalCourtesy'] ?? 0), $W);
+        $printer->setEmphasis(false);
+        $div();
+
+        $sectionTitle('DESCUENTOS POR CATEGORIA');
+        foreach ($discountByCategory as $c) {
+            $this->printTwoColumnLine($printer, $c['name'] ?? '', $money($c['amount'] ?? 0), $W);
+        }
+        $printer->setEmphasis(true);
+        $this->printTwoColumnLine($printer, 'TOTAL DESCUENTOS', $money($summary['totalDiscounts'] ?? 0), $W);
+        $printer->setEmphasis(false);
+        $div();
+
+        // ── Declaración de cajero ──
+        $sectionTitle('DECLARACION DE CAJERO');
+        foreach (($declarations['byMethod'] ?? []) as $d) {
+            $this->printTwoColumnLine(
+                $printer,
+                $d['name'] ?? '',
+                $money($d['declared'] ?? 0) . " (Esp: " . $money($d['expected'] ?? 0) . " / Dif: " . $money($d['difference'] ?? 0) . ")",
+                $W
+            );
+        }
+        $printer->setEmphasis(true);
+        $this->printTwoColumnLine($printer, 'TOTAL DECLARADO', $money($declarations['totalDeclared'] ?? 0), $W);
+        $this->printTwoColumnLine($printer, 'SOBRANTE/FALTANTE', $money($declarations['totalDifference'] ?? 0), $W);
+        $printer->setEmphasis(false);
+    }
+
+    /**
      * Imprime la CUENTA / NOTA DE CONSUMO (estilo SoftRestaurant) usando datos directos del front sin templateId.
      * POST /printers/print-consumo
      * Body: array de objetos { printerName, data }
