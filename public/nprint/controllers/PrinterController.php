@@ -619,72 +619,112 @@ class PrinterController
                     }
                 }
 
-                $declaredTotal = $data['total'] ?? null;
-                $calculatedTotal = 0;
+                // Agrupa las propinas por mesero (usando waiterId si viene, o el nombre
+                // como respaldo) para imprimir un ticket físico independiente por cada uno,
+                // conservando el orden en el que aparecen en el payload.
+                $groups = [];
+                $groupOrder = [];
                 foreach ($propinas as $entry) {
-                    $calculatedTotal += (float) ($entry['amount'] ?? 0);
+                    $waiterKey = $entry['waiterId'] ?? $entry['waiterFullName'] ?? '__sin_mesero__';
+                    $waiterKey = (string) $waiterKey;
+                    if (!isset($groups[$waiterKey])) {
+                        $groups[$waiterKey] = [];
+                        $groupOrder[] = $waiterKey;
+                    }
+                    $groups[$waiterKey][] = $entry;
                 }
-                $totalPropinas = $declaredTotal !== null ? (float) $declaredTotal : $calculatedTotal;
 
                 $printer = null;
                 $printerClosed = false;
                 try {
                     $connector = new WindowsPrintConnector($printerName);
                     $printer = new Printer($connector);
-
                     $printer->initialize();
-                    $printer->setJustification(Printer::JUSTIFY_CENTER);
-                    $printer->setTextSize(2, 2);
-                    $printer->setEmphasis(true);
-                    $printer->text("PAGO DE PROPINAS\n");
-                    $printer->setEmphasis(false);
-                    $printer->feed(1);
-                    $printer->setTextSize(1, 1);
-                    $printer->setJustification(Printer::JUSTIFY_LEFT);
 
-                    if ($printName) {
-                        $printer->text("Impresión: " . $printName . "\n");
-                    }
-                    $printer->text("Fecha: " . date('d/m/Y H:i:s') . "\n");
-                    $printer->text(str_repeat('-', 48) . "\n");
-                    $printer->text("Detalle de pagos:\n");
+                    if (empty($groups)) {
+                        // Sin registros de propinas: se imprime un único ticket informativo.
+                        $printer->setJustification(Printer::JUSTIFY_CENTER);
+                        $printer->setTextSize(2, 2);
+                        $printer->setEmphasis(true);
+                        $printer->text("PAGO DE PROPINAS\n");
+                        $printer->setEmphasis(false);
+                        $printer->feed(1);
+                        $printer->setTextSize(1, 1);
+                        $printer->setJustification(Printer::JUSTIFY_LEFT);
 
-                    if (empty($propinas)) {
-                        $printer->text("Sin registros de propinas.\n");
-                    } else {
-                        foreach ($propinas as $entry) {
-                            $printer->text(str_repeat('-', 48) . "\n");
-                            $printer->text("Orden: " . ($entry['orderId'] ?? '') . "   Mesa: " . ($entry['tableName'] ?? '') . "\n");
-                            $printer->text("Mesero: " . ($entry['waiterFullName'] ?? '') . "\n");
-                            $printer->text(
-                                "Propina: " . $this->formatMoney($entry['amount'] ?? 0) .
-                                    "  Cobrado: " . $this->formatMoney($entry['collected'] ?? 0) .
-                                    "  Pagado: " . $this->formatMoney($entry['paid'] ?? 0) . "\n"
-                            );
+                        if ($printName) {
+                            $printer->text("Impresión: " . $printName . "\n");
                         }
+                        $printer->text("Fecha: " . date('d/m/Y H:i:s') . "\n");
                         $printer->text(str_repeat('-', 48) . "\n");
+                        $printer->text("Sin registros de propinas.\n");
+
+                        $printer->feed(3);
+                        $printer->cut();
+                    } else {
+                        // Un ticket completo (encabezado + detalle + total) por cada mesero,
+                        // cortando el papel al final de cada uno antes de pasar al siguiente.
+                        foreach ($groupOrder as $waiterKey) {
+                            $entries = $groups[$waiterKey];
+                            $waiterName = $entries[0]['waiterFullName'] ?? 'Sin nombre';
+                            $waiterTotal = 0;
+                            foreach ($entries as $entry) {
+                                $waiterTotal += (float) ($entry['amount'] ?? 0);
+                            }
+
+                            $printer->setJustification(Printer::JUSTIFY_CENTER);
+                            $printer->setTextSize(2, 2);
+                            $printer->setEmphasis(true);
+                            $printer->text("PAGO DE PROPINAS\n");
+                            $printer->setEmphasis(false);
+                            $printer->feed(1);
+                            $printer->setTextSize(1, 1);
+                            $printer->setJustification(Printer::JUSTIFY_LEFT);
+
+                            if ($printName) {
+                                $printer->text("Impresión: " . $printName . "\n");
+                            }
+                            $printer->text("Fecha: " . date('d/m/Y H:i:s') . "\n");
+                            $printer->text("Mesero: " . $waiterName . "\n");
+                            $printer->text(str_repeat('-', 48) . "\n");
+                            $printer->text("Detalle de pagos:\n");
+
+                            foreach ($entries as $entry) {
+                                $printer->text(str_repeat('-', 48) . "\n");
+                                $printer->text("Orden: " . ($entry['orderId'] ?? '') . "   Mesa: " . ($entry['tableName'] ?? '') . "\n");
+                                $printer->text(
+                                    "Propina: " . $this->formatMoney($entry['amount'] ?? 0) .
+                                        "  Cobrado: " . $this->formatMoney($entry['collected'] ?? 0) .
+                                        "  Pagado: " . $this->formatMoney($entry['paid'] ?? 0) . "\n"
+                                );
+                            }
+                            $printer->text(str_repeat('-', 48) . "\n");
+
+                            $printer->feed(1);
+                            $printer->setJustification(Printer::JUSTIFY_CENTER);
+                            $printer->setTextSize(2, 2);
+                            $printer->setEmphasis(true);
+                            $printer->text("TOTAL PROPINA - " . mb_strtoupper($waiterName) . "\n");
+                            $printer->text($this->formatMoney($waiterTotal) . "\n");
+                            $printer->setEmphasis(false);
+                            $printer->setTextSize(1, 1);
+                            $printer->setJustification(Printer::JUSTIFY_LEFT);
+
+                            $printer->feed(3);
+                            $printer->cut();
+                        }
                     }
 
-                    $printer->feed(1);
-                    $printer->setJustification(Printer::JUSTIFY_CENTER);
-                    $printer->setTextSize(2, 2);
-                    $printer->setEmphasis(true);
-                    $printer->text("TOTAL PROPINAS PAGADAS\n");
-                    $printer->text($this->formatMoney($totalPropinas) . "\n");
-                    $printer->setEmphasis(false);
-                    $printer->setTextSize(1, 1);
-                    $printer->setJustification(Printer::JUSTIFY_LEFT);
-
-                    $printer->feed(3);
-                    $printer->cut();
                     $printer->close();
                     $printerClosed = true;
 
+                    $ticketsPrinted = empty($groups) ? 1 : count($groups);
                     $results[] = [
                         'success' => 1,
-                        'message' => 'Ticket de propinas impreso correctamente en ' . $printerName,
+                        'message' => 'Se imprimieron ' . $ticketsPrinted . ' ticket(s) de propinas en ' . $printerName . ' (uno por mesero)',
                         'printer_name' => $printerName,
                         'template' => 'propinas_ticket',
+                        'tickets_printed' => $ticketsPrinted,
                         'timestamp' => date('Y-m-d H:i:s')
                     ];
                 } catch (Exception $e) {
