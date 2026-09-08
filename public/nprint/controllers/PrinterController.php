@@ -289,6 +289,127 @@ class PrinterController
         return $response->withHeader('Content-Type', 'application/json');
     }
 
+    /* Cuerpo del ticket de cocina. Lo comparten la comanda y el ticket de
+     * cancelación a propósito: cocina ya sabe leer este formato de un vistazo
+     * — misma posición del área, la mesa y la orden — y un diseño distinto
+     * para la cancelación obligaría a aprender otro. Lo único que cambia es
+     * el encabezado, el motivo y que cada producto va marcado CANCELADO. */
+    private function renderComandaBody($printer, array $data, bool $esCancelacion): void
+    {
+        $printer->initialize();
+        $printer->setJustification(Printer::JUSTIFY_CENTER);
+        $printer->setTextSize(2, 2);
+        $printer->text($esCancelacion ? "** CANCELACION **\n" : "COMANDA TICKET\n");
+        $printer->feed(1);
+        $printer->setTextSize(1, 2); // un poco mas grande que el tamaño normal, sin duplicar el ancho
+        $printer->setJustification(Printer::JUSTIFY_LEFT);
+
+        $printer->text("Area: " . ($data['areaName'] ?? '') . "\n");
+        $printer->text("Mesa: " . ($data['tableName'] ?? '') . "\n");
+        $printer->text("Orden: " . ($data['orderId'] ?? '') . "\n");
+        $printer->text("Fecha: " . date('d/m/Y H:i:s') . "\n");
+
+        /* Quién y por qué. En una comanda normal no vienen estas llaves, así
+         * que el ticket de cocina de siempre no cambia ni una línea. */
+        if ($esCancelacion) {
+            $cancelaPor = trim((string)($data['cancelledBy'] ?? ''));
+            if ($cancelaPor !== '') {
+                $printer->text("Cancelo: " . $cancelaPor . "\n");
+            }
+            $printer->text(str_repeat('-', 48) . "\n");
+            $motivo = trim((string)($data['reason'] ?? ''));
+            /* El motivo es lo primero que busca cocina cuando le llega esto:
+             * sin él, el ticket solo genera una pregunta a gritos. */
+            $printer->setEmphasis(true);
+            $printer->text("Motivo: " . ($motivo !== '' ? $motivo : 'Sin motivo') . "\n");
+            $printer->setEmphasis(false);
+        }
+
+        $printer->text(str_repeat('-', 48) . "\n");
+        $printer->text($esCancelacion ? "NO PREPARAR / RETIRAR: \n" : "Pedidos: \n");
+
+        $rawItems = $data['items'] ?? [];
+        $items = [];
+        if (is_array($rawItems)) {
+            foreach ($rawItems as $item) {
+                if (is_array($item)) {
+                    $items[] = $item;
+                }
+            }
+        }
+
+        $modifiersByCompositeId = [];
+        $mainItems = [];
+        foreach ($items as $item) {
+            if (!empty($item['isModifier'])) {
+                $compositeKey = $item['compositeProductId'] ?? '';
+                if ($compositeKey !== '') {
+                    $modifiersByCompositeId[$compositeKey][] = $item;
+                }
+                continue;
+            }
+            $mainItems[] = $item;
+        }
+
+        if (empty($mainItems)) {
+            $printer->text("Sin items registrados\n");
+        } else {
+            usort($mainItems, function ($a, $b) {
+                $courseA = $a['course'] ?? PHP_INT_MAX;
+                $courseB = $b['course'] ?? PHP_INT_MAX;
+                return $courseA <=> $courseB;
+            });
+
+            foreach ($mainItems as $item) {
+                $printer->text(str_repeat('-', 48) . "\n");
+
+                $courseLabel = $this->formatCourseLabel($item['course'] ?? null);
+                if ($courseLabel !== '') {
+                    $printer->text("Tiempo: " . $courseLabel . "\n");
+                }
+
+                $qty = trim((string) ($item['qty'] ?? ''));
+                $name = trim((string) ($item['name'] ?? ''));
+                $itemLine = trim(($qty !== '' ? $qty . ' ' : '') . $name);
+                if ($itemLine === '') {
+                    $itemLine = 'Producto sin nombre';
+                }
+                $printer->text($itemLine . "\n");
+
+                $notes = $item['notes'] ?? null;
+                if (!empty($notes)) {
+                    $printer->text("Nota: " . $notes . "\n");
+                }
+
+                $compositeKey = $item['compositeProductId'] ?? '';
+                $modifiers = [];
+                if (!empty($item['isCompositeProductMain']) && $compositeKey !== '') {
+                    $modifiers = $modifiersByCompositeId[$compositeKey] ?? [];
+                }
+
+                if (!empty($modifiers)) {
+                    $printer->text("Modificadores:\n");
+                    foreach ($modifiers as $modifier) {
+                        $halfLabel = $this->formatHalfLabel($modifier['half'] ?? null);
+                        $modifierName = (string) ($modifier['name'] ?? '');
+                        $modifierLabel = trim(($halfLabel !== '' ? $halfLabel . ' - ' : '') . $modifierName);
+                        if ($modifierLabel === '') {
+                            continue;
+                        }
+                        $printer->text('   ' . $modifierLabel . "\n");
+
+                        $modifierNotes = $modifier['notes'] ?? null;
+                        if (!empty($modifierNotes)) {
+                            $printer->text("      Nota: " . $modifierNotes . "\n");
+                        }
+                    }
+                }
+
+                $printer->text("\n");
+            }
+        }
+    }
+
     /**
      * Imprime la plantilla fija COMANDA TICKET usando datos directos del front sin templateId.
      * POST /printers/print-comanda
@@ -338,101 +459,7 @@ class PrinterController
                     $connector = new WindowsPrintConnector($printerName);
                     $printer = new Printer($connector);
 
-                    $printer->initialize();
-                    $printer->setJustification(Printer::JUSTIFY_CENTER);
-                    $printer->setTextSize(2, 2);
-                    $printer->text("COMANDA TICKET\n");
-                    $printer->feed(1);
-                    $printer->setTextSize(1, 2); // un poco mas grande que el tamaño normal, sin duplicar el ancho
-                    $printer->setJustification(Printer::JUSTIFY_LEFT);
-
-                    $printer->text("Area: " . ($data['areaName'] ?? '') . "\n");
-                    $printer->text("Mesa: " . ($data['tableName'] ?? '') . "\n");
-                    $printer->text("Orden: " . ($data['orderId'] ?? '') . "\n");
-                    $printer->text("Fecha: " . date('d/m/Y H:i:s') . "\n");
-                    $printer->text(str_repeat('-', 48) . "\n");
-                    $printer->text("Pedidos: \n");
-
-                    $rawItems = $data['items'] ?? [];
-                    $items = [];
-                    if (is_array($rawItems)) {
-                        foreach ($rawItems as $item) {
-                            if (is_array($item)) {
-                                $items[] = $item;
-                            }
-                        }
-                    }
-
-                    $modifiersByCompositeId = [];
-                    $mainItems = [];
-                    foreach ($items as $item) {
-                        if (!empty($item['isModifier'])) {
-                            $compositeKey = $item['compositeProductId'] ?? '';
-                            if ($compositeKey !== '') {
-                                $modifiersByCompositeId[$compositeKey][] = $item;
-                            }
-                            continue;
-                        }
-                        $mainItems[] = $item;
-                    }
-
-                    if (empty($mainItems)) {
-                        $printer->text("Sin items registrados\n");
-                    } else {
-                        usort($mainItems, function ($a, $b) {
-                            $courseA = $a['course'] ?? PHP_INT_MAX;
-                            $courseB = $b['course'] ?? PHP_INT_MAX;
-                            return $courseA <=> $courseB;
-                        });
-
-                        foreach ($mainItems as $item) {
-                            $printer->text(str_repeat('-', 48) . "\n");
-
-                            $courseLabel = $this->formatCourseLabel($item['course'] ?? null);
-                            if ($courseLabel !== '') {
-                                $printer->text("Tiempo: " . $courseLabel . "\n");
-                            }
-
-                            $qty = trim((string) ($item['qty'] ?? ''));
-                            $name = trim((string) ($item['name'] ?? ''));
-                            $itemLine = trim(($qty !== '' ? $qty . ' ' : '') . $name);
-                            if ($itemLine === '') {
-                                $itemLine = 'Producto sin nombre';
-                            }
-                            $printer->text($itemLine . "\n");
-
-                            $notes = $item['notes'] ?? null;
-                            if (!empty($notes)) {
-                                $printer->text("Nota: " . $notes . "\n");
-                            }
-
-                            $compositeKey = $item['compositeProductId'] ?? '';
-                            $modifiers = [];
-                            if (!empty($item['isCompositeProductMain']) && $compositeKey !== '') {
-                                $modifiers = $modifiersByCompositeId[$compositeKey] ?? [];
-                            }
-
-                            if (!empty($modifiers)) {
-                                $printer->text("Modificadores:\n");
-                                foreach ($modifiers as $modifier) {
-                                    $halfLabel = $this->formatHalfLabel($modifier['half'] ?? null);
-                                    $modifierName = (string) ($modifier['name'] ?? '');
-                                    $modifierLabel = trim(($halfLabel !== '' ? $halfLabel . ' - ' : '') . $modifierName);
-                                    if ($modifierLabel === '') {
-                                        continue;
-                                    }
-                                    $printer->text('   ' . $modifierLabel . "\n");
-
-                                    $modifierNotes = $modifier['notes'] ?? null;
-                                    if (!empty($modifierNotes)) {
-                                        $printer->text("      Nota: " . $modifierNotes . "\n");
-                                    }
-                                }
-                            }
-
-                            $printer->text("\n");
-                        }
-                    }
+                    $this->renderComandaBody($printer, $data, false);
 
                     $printer->feed(3);
                     $printer->cut();
@@ -474,6 +501,95 @@ class PrinterController
             return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
         }
     }
+    /**
+     * Ticket de CANCELACIÓN de productos — se manda al área de impresión que
+     * ya había recibido la comanda, para que cocina/barra sepa que eso ya no
+     * se prepara (o que hay que retirarlo si ya salió).
+     * POST /printers/print-cancelacion
+     *
+     * Mismo cuerpo que la comanda (renderComandaBody), más:
+     *   data.reason      → motivo de la cancelación
+     *   data.cancelledBy → quién la hizo (opcional)
+     */
+    public function printCancelacion(Request $request, Response $response, $args = [])
+    {
+        try {
+            $jobs = $request->getParsedBody();
+            if (!is_array($jobs)) {
+                $rawBody = (string) $request->getBody();
+                $jobs = json_decode($rawBody, true);
+            }
+            if (!is_array($jobs)) {
+                $response->getBody()->write(json_encode([
+                    'success' => 0,
+                    'message' => 'El cuerpo debe ser un array JSON válido.'
+                ], JSON_UNESCAPED_UNICODE));
+                return $response->withHeader('Content-Type', 'application/json');
+            }
+
+            $results = [];
+            foreach ($jobs as $job) {
+                $printerName = $job['printerName'] ?? null;
+                $data = $job['data'] ?? [];
+
+                if (!$printerName) {
+                    $results[] = ['success' => 0, 'message' => 'Nombre de impresora es requerido', 'printer_name' => $printerName];
+                    continue;
+                }
+                if (!is_array($data)) {
+                    $results[] = ['success' => 0, 'message' => 'El campo data debe ser un objeto', 'printer_name' => $printerName];
+                    continue;
+                }
+
+                $printer = null;
+                $printerClosed = false;
+                try {
+                    $connector = new WindowsPrintConnector($printerName);
+                    $printer = new Printer($connector);
+
+                    $this->renderComandaBody($printer, $data, true);
+
+                    $printer->feed(3);
+                    $printer->cut();
+                    $printer->close();
+                    $printerClosed = true;
+
+                    $results[] = [
+                        'success' => 1,
+                        'message' => 'Ticket de CANCELACION impreso correctamente en ' . $printerName,
+                        'printer_name' => $printerName,
+                        'template' => 'cancelacion_ticket',
+                        'timestamp' => date('Y-m-d H:i:s')
+                    ];
+                } catch (Exception $e) {
+                    $results[] = [
+                        'success' => 0,
+                        'message' => 'Error al imprimir: ' . $e->getMessage(),
+                        'printer_name' => $printerName,
+                        'error_type' => 'general'
+                    ];
+                } finally {
+                    if ($printer && !$printerClosed) {
+                        try {
+                            $printer->close();
+                        } catch (Exception $inner) {
+                            // Intencionalmente silencioso para no interrumpir la respuesta
+                        }
+                    }
+                }
+            }
+
+            $response->getBody()->write(json_encode($results, JSON_UNESCAPED_UNICODE));
+            return $response->withHeader('Content-Type', 'application/json');
+        } catch (Exception $e) {
+            $response->getBody()->write(json_encode([
+                'success' => 0,
+                'message' => 'Error al procesar el request: ' . $e->getMessage()
+            ], JSON_UNESCAPED_UNICODE));
+            return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
+        }
+    }
+
     /**
      * Abre el cajón de dinero (gaveta) conectado por cable RJ11 a la
      * impresora indicada, enviando el pulso ESC/POS estándar de apertura
@@ -1206,6 +1322,21 @@ class PrinterController
         $tot = $data['totales'] ?? [];
         $descuentoOrden = $data['descuentoOrden'] ?? null;
 
+        /* Cómo se pagó la cuenta. Todo esto es OPCIONAL: el ticket de cuenta
+         * (print-consumo) se imprime ANTES de cobrar, así que no hay pagos ni
+         * propina que mostrar, y los payloads viejos que no mandan estas
+         * llaves siguen imprimiendo exactamente igual que antes.
+         *
+         * pagos: [{ metodo, monto, tipo: 'SALE'|'TIP', payerName? }]
+         * El desglose importa porque el TOTAL solo no explica nada: una cuenta
+         * de $416 pagada $200 en efectivo y $266 con tarjeta, más $50 de
+         * propina, hoy se imprime como un número suelto y el cliente no puede
+         * cuadrarlo. Ese detalle ya existía en el ticket de cuenta dividida
+         * (renderConsolidatedTicket); esto lo trae al ticket normal. */
+        $pagos = is_array($data['pagos'] ?? null) ? $data['pagos'] : [];
+        $propina = (float)($tot['propina'] ?? 0);
+        $consumo = isset($tot['consumo']) ? (float)$tot['consumo'] : null;
+
         $printer->initialize();
 
         /* ===== Cabecera Restaurante ===== */
@@ -1310,6 +1441,20 @@ class PrinterController
             $printer->text(str_repeat('-', $W) . "\n");
         }
 
+        /* ===== Consumo + propina =====
+         * Solo cuando hubo propina. Sin estas dos líneas el TOTAL no cuadra
+         * con la suma de los productos y el cliente no sabe por qué. */
+        if ($propina > 0) {
+            $this->printTwoColumnLine(
+                $printer,
+                'CONSUMO',
+                $this->formatMoney($consumo !== null ? $consumo : (($tot['total'] ?? 0) - $propina)),
+                $W
+            );
+            $this->printTwoColumnLine($printer, 'PROPINA', $this->formatMoney($propina), $W);
+            $printer->text(str_repeat('-', $W) . "\n");
+        }
+
         /* ===== TOTAL grande ===== */
         $printer->setJustification(Printer::JUSTIFY_CENTER);
         $printer->setTextSize(2, 2);
@@ -1324,13 +1469,65 @@ class PrinterController
             $printer->text($tot['totalEnLetra'] . "\n\n");
         }
 
-        /* ===== Subtotal / IVA ===== */
+        /* ===== Subtotal / IVA =====
+         * Se imprimen tal como vienen: la propina no causa IVA, así que quien
+         * arma el payload es el que debe sacar la base del CONSUMO, no del
+         * total cobrado. Aquí no se recalcula nada. */
         $this->printTwoColumnLine(
             $printer,
             "SUBTOTAL:" . $this->formatMoney($tot['subtotal'] ?? 0),
             "IVA:" . $this->formatMoney($tot['iva'] ?? 0),
             $W
         );
+
+        /* ===== Forma de pago ===== */
+        $this->printFormaDePago($printer, $pagos, $W);
+    }
+
+    /* Desglose de cómo se pagó: una línea por pago, separando propina.
+     * No imprime nada si no vienen pagos — así el ticket de cuenta previo al
+     * cobro queda idéntico a como estaba. */
+    private function printFormaDePago($printer, array $pagos, int $W): void
+    {
+        if (empty($pagos)) return;
+
+        $printer->text(str_repeat('=', $W) . "\n");
+        $printer->setEmphasis(true);
+        $printer->setJustification(Printer::JUSTIFY_CENTER);
+        $printer->text("FORMA DE PAGO\n");
+        $printer->setJustification(Printer::JUSTIFY_LEFT);
+        $printer->setEmphasis(false);
+        $printer->text(str_repeat('-', $W) . "\n");
+
+        $sumaPagos = 0.0;
+        foreach ($pagos as $pago) {
+            if (!is_array($pago)) continue;
+
+            $metodo = trim((string)($pago['metodo'] ?? ''));
+            if ($metodo === '') $metodo = 'Otro';
+            $monto = (float)($pago['monto'] ?? 0);
+            $esPropina = strtoupper((string)($pago['tipo'] ?? 'SALE')) === 'TIP';
+            $sumaPagos += $monto;
+
+            /* El nombre solo aparece cuando la cuenta se dividió por persona:
+             * es lo que permite reclamar "yo pagué mi parte con tarjeta". */
+            $payerName = trim((string)($pago['payerName'] ?? ''));
+
+            $etiqueta = $metodo;
+            if ($payerName !== '') $etiqueta .= ' - ' . $payerName;
+            if ($esPropina) $etiqueta .= ' (PROPINA)';
+
+            $this->printTwoColumnLine($printer, $etiqueta, $this->formatMoney($monto), $W);
+        }
+
+        /* Con un solo pago la suma es el mismo número de arriba y solo estorba;
+         * con varios es justo lo que se quiere verificar de un vistazo. */
+        if (count($pagos) > 1) {
+            $printer->text(str_repeat('-', $W) . "\n");
+            $printer->setEmphasis(true);
+            $this->printTwoColumnLine($printer, 'TOTAL PAGADO', $this->formatMoney($sumaPagos), $W);
+            $printer->setEmphasis(false);
+        }
     }
 
     /**
