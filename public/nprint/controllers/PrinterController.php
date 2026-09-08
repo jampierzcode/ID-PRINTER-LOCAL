@@ -704,7 +704,7 @@ class PrinterController
                             $printer->setJustification(Printer::JUSTIFY_CENTER);
                             $printer->setTextSize(2, 2);
                             $printer->setEmphasis(true);
-                            $printer->text("TOTAL PROPINA - " . mb_strtoupper($waiterName) . "\n");
+                            $printer->text("TOTAL PROPINA - " . strtoupper($waiterName) . "\n");
                             $printer->text($this->formatMoney($waiterTotal) . "\n");
                             $printer->setEmphasis(false);
                             $printer->setTextSize(1, 1);
