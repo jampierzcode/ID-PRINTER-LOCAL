@@ -923,6 +923,14 @@ class PrinterController
                 $shiftId = $data['shiftId'] ?? '';
                 $stationId = $data['stationId'] ?? '';
                 $printerStationName = (string) ($data['printerStationName'] ?? '');
+                /* Quién autorizó la salida/entrada de dinero y quién la recibió
+                 * físicamente. Son dos personas distintas y dos firmas distintas
+                 * — antes el vale solo dejaba un espacio libre sin etiquetar y
+                 * quedaba a criterio de quien firmaba, sin quedar claro cuál
+                 * firma es cuál. Opcional: si el front no manda el nombre, se
+                 * imprime la línea igual para firmar a mano. */
+                $authorizedBy = trim((string) ($data['authorizedBy'] ?? ''));
+                $receivedBy = trim((string) ($data['receivedBy'] ?? ''));
                 $createdAt = $data['createdAt'] ?? '';
                 $createdAtFormatted = '';
                 if (!empty($createdAt)) {
@@ -967,6 +975,25 @@ class PrinterController
                     $printer->setEmphasis(false);
                     $printer->setTextSize(1, 1);
                     $printer->setJustification(Printer::JUSTIFY_LEFT);
+
+                    /* ===== Firmas: quién autorizó y quién recibió =====
+                     * Dos espacios separados y etiquetados, cada uno con su
+                     * propia línea para firmar. Si viene el nombre se imprime
+                     * arriba de la línea; si no, queda en blanco para llenarse
+                     * a mano junto con la firma. */
+                    $printer->feed(1);
+                    $printer->text(str_repeat('-', 48) . "\n");
+
+                    $printer->text("Autorizo: " . $authorizedBy . "\n");
+                    $printer->feed(2);
+                    $printer->text(str_repeat('_', 30) . "\n");
+                    $printer->text("Firma de quien autoriza\n");
+
+                    $printer->feed(2);
+                    $printer->text("Recibio: " . $receivedBy . "\n");
+                    $printer->feed(2);
+                    $printer->text(str_repeat('_', 30) . "\n");
+                    $printer->text("Firma de quien recibe\n");
 
                     $printer->feed(3);
                     $printer->cut();
