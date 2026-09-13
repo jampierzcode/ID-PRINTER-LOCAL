@@ -314,7 +314,9 @@ class PrinterController
         if ($mesero !== '') {
             $printer->text("Mesero: " . $mesero . "\n");
         }
-        $printer->text("Orden: " . ($data['orderId'] ?? '') . "\n");
+        /* El número de orden ya no se imprime a propósito: a cocina lo
+         * confundía con el número de mesa. El front lo sigue mandando (se
+         * quitará ahí más adelante); aquí simplemente se ignora. */
         $printer->text("Fecha: " . date('d/m/Y H:i:s') . "\n");
 
         /* Quién y por qué. En una comanda normal no vienen estas llaves, así
