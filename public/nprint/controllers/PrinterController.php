@@ -8,6 +8,7 @@ use App\Models\TemplateModel;
 
 use Mike42\Escpos\Printer;
 use Mike42\Escpos\PrintConnectors\WindowsPrintConnector;
+use App\Printing\TrackedWindowsPrintConnector;
 use Mike42\Escpos\CapabilityProfile;
 use Mike42\Escpos\GdEscposImage;
 
@@ -79,7 +80,7 @@ class PrinterController
                 $caracteres = $template['caracteres'] ?? 48;
                 $paperWidth = $caracteres * 8; // Calcula el ancho real en píxeles
 
-                $connector = new WindowsPrintConnector($printerName);
+                $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                 //$profile = CapabilityProfile::load("simple");
                 $printer = new Printer($connector);
 
@@ -456,7 +457,7 @@ class PrinterController
                 $printer = null;
                 $printerClosed = false;
                 try {
-                    $connector = new WindowsPrintConnector($printerName);
+                    $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
 
                     $this->renderComandaBody($printer, $data, false);
@@ -544,7 +545,7 @@ class PrinterController
                 $printer = null;
                 $printerClosed = false;
                 try {
-                    $connector = new WindowsPrintConnector($printerName);
+                    $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
 
                     $this->renderComandaBody($printer, $data, true);
@@ -753,7 +754,7 @@ class PrinterController
                 $printer = null;
                 $printerClosed = false;
                 try {
-                    $connector = new WindowsPrintConnector($printerName);
+                    $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
                     $printer->initialize();
 
@@ -945,7 +946,7 @@ class PrinterController
                 $printer = null;
                 $printerClosed = false;
                 try {
-                    $connector = new WindowsPrintConnector($printerName);
+                    $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
 
                     $printer->initialize();
@@ -1090,7 +1091,7 @@ class PrinterController
                 $printer = null;
                 $printerClosed = false;
                 try {
-                    $connector = new WindowsPrintConnector($printerName);
+                    $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
                     $printer->initialize();
 
@@ -1604,7 +1605,7 @@ class PrinterController
                 $printerClosed = false;
 
                 try {
-                    $connector = new WindowsPrintConnector($printerName);
+                    $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
                     $W = 48; // ancho 80mm típico
 
@@ -1689,7 +1690,7 @@ class PrinterController
                 $printerClosed = false;
 
                 try {
-                    $connector = new WindowsPrintConnector($printerName);
+                    $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
                     $W = 48;
 
@@ -1804,7 +1805,7 @@ class PrinterController
                 $printerClosed = false;
 
                 try {
-                    $connector = new WindowsPrintConnector($printerName);
+                    $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
                     $W = 48;
 
@@ -2498,7 +2499,7 @@ class PrinterController
                 $printerClosed = false;
 
                 try {
-                    $connector = new WindowsPrintConnector($printerName);
+                    $connector = new TrackedWindowsPrintConnector($printerName, $job['jobUid'] ?? null);
                     $printer = new Printer($connector);
 
                     /* (1) Ticket consolidado de la cuenta */
