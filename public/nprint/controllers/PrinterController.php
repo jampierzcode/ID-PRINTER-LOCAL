@@ -307,6 +307,13 @@ class PrinterController
 
         $printer->text("Area: " . ($data['areaName'] ?? '') . "\n");
         $printer->text("Mesa: " . ($data['tableName'] ?? '') . "\n");
+        /* Mesero de la cuenta: cocina sabe a quién llamar cuando el platillo
+         * sale o hay una duda. Opcional — un front viejo que no lo manda (o una
+         * cuenta sin mesero) imprime el ticket igual que antes, sin la línea. */
+        $mesero = trim((string)($data['waiterName'] ?? ''));
+        if ($mesero !== '') {
+            $printer->text("Mesero: " . $mesero . "\n");
+        }
         $printer->text("Orden: " . ($data['orderId'] ?? '') . "\n");
         $printer->text("Fecha: " . date('d/m/Y H:i:s') . "\n");
 
@@ -508,7 +515,8 @@ class PrinterController
      * se prepara (o que hay que retirarlo si ya salió).
      * POST /printers/print-cancelacion
      *
-     * Mismo cuerpo que la comanda (renderComandaBody), más:
+     * Mismo cuerpo que la comanda (renderComandaBody, que ya imprime
+     * data.waiterName si viene), más:
      *   data.reason      → motivo de la cancelación
      *   data.cancelledBy → quién la hizo (opcional)
      */
