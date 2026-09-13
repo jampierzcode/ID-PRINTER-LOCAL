@@ -171,6 +171,19 @@ Solo al re-loguearse las apps recargan los datos del restaurante desde POS Centr
 
 ---
 
+### 10. Activar el registro de impresión de Windows (una sola vez)
+
+El POS mide cada impresión: si llegó a esta PC, cuánto tardó y **si de verdad se imprimió**. Para lo último necesita el registro de impresión de Windows, que viene **apagado** de fábrica.
+
+1. Clic derecho en `habilitar_registro_impresion.bat` → **Ejecutar como administrador**
+2. Debe decir `enabled: true`
+
+Se hace **solo en esta PC** (la del ID-Printer), no en las cajas ni tablets. Para verificarlo: `https://<IP>:9443/nprint/jobs/diagnostico` debe mostrar `"logImpresionActivo": true`.
+
+Sin el registro todo sigue imprimiendo igual; solo que el POS marcará los tickets como **"sin confirmar"** en lugar de **"impreso"**.
+
+> **Límite:** "impreso" significa que Windows lo terminó de mandar a la impresora. Con drivers que no reportan estado (por ejemplo **Generic / Text Only**), Windows puede darlo por impreso aunque la impresora no tenga papel. Con drivers del fabricante (Epson TM, Star…) sí se detecta.
+
 ## Actualizar a la última versión
 
 Desde la carpeta del proyecto:

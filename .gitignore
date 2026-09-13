@@ -16,3 +16,5 @@ public/nprint/.env
 
 # Basura de macOS
 .DS_Store
+# Bitácora local de impresiones (rastreo del POS) — cambia en cada ticket
+public/nprint/data/print_jobs.sqlite*

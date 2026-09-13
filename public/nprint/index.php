@@ -45,6 +45,16 @@ $app->add(function (Request $request, $handler) {
 
 $app->setBasePath('/nprint');
 
+/* Rastreo de impresiones: marca la hora en que llegó cada petición de
+ * impresión, antes de parsear nada. Ver App\Printing\PrintJobLog. */
+$app->add(function (Request $request, $handler) {
+    $ruta = $request->getUri()->getPath();
+    if ($request->getMethod() === 'POST' && strpos($ruta, '/printers/') !== false) {
+        \App\Printing\PrintJobLog::iniciarPeticion(substr($ruta, strpos($ruta, '/printers/')));
+    }
+    return $handler->handle($request);
+});
+
 $errorMiddleware = $app->addErrorMiddleware(true, true, true);
 
 // Define app routes
@@ -76,6 +86,10 @@ $app->group('/printers', function ($group) {
 });
 
 // Rutas de huellas
+// Estado de cada trabajo de impresión (rastreo del POS).
+$app->get('/jobs/diagnostico', [\App\Controllers\PrintJobsController::class, 'diagnostico']);
+$app->get('/jobs', [\App\Controllers\PrintJobsController::class, 'status']);
+
 $app->group('/fingerprint', function ($group) {
     $group->get('/list-readers', [FingerprintController::class, 'listReaders']);
     $group->post('/enroll', [FingerprintController::class, 'enroll']);
