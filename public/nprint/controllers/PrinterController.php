@@ -928,7 +928,25 @@ class PrinterController
                     continue;
                 }
 
-                $movementType = strtoupper((string) ($data['type'] ?? ''));
+                /* El ticket debe decir lo mismo que ya ve el cajero en pantalla
+                 * (Retiro/Deposito), no el código crudo de la BD (IN/OUT/DROP/
+                 * PAYOUT/ADJUST) — antes se imprimía "Tipo: OUT" tal cual.
+                 * `typeLabel` lo manda el front ya traducido (MovementsModal.tsx,
+                 * pos_cash_front); si no llega (front viejo, u otro caller), se
+                 * traduce aquí mismo como respaldo — nunca debe quedar el código
+                 * crudo en el papel. */
+                $movementTypeRaw = strtoupper((string) ($data['type'] ?? ''));
+                $movementTypeLabels = [
+                    'IN' => 'Deposito',
+                    'OUT' => 'Retiro',
+                    'DROP' => 'Retiro de boveda',
+                    'PAYOUT' => 'Pago',
+                    'ADJUST' => 'Ajuste',
+                ];
+                $movementType = trim((string) ($data['typeLabel'] ?? ''));
+                if ($movementType === '') {
+                    $movementType = $movementTypeLabels[$movementTypeRaw] ?? $movementTypeRaw;
+                }
                 $amount = (float) ($data['amount'] ?? 0);
                 $reason = (string) ($data['reason'] ?? '');
                 $shiftId = $data['shiftId'] ?? '';
@@ -969,10 +987,16 @@ class PrinterController
 
                     $printer->setTextSize(1, 1);
                     $printer->setJustification(Printer::JUSTIFY_LEFT);
+                    /* Sin acentos a propósito: escpos-php traduce UTF-8 al code
+                     * page que reporte la impresora vía su CapabilityProfile,
+                     * pero en las impresoras genéricas que usan los restaurantes
+                     * esa tabla no coincide con la real del firmware — la "ó" salía
+                     * como "¢" en el papel (ver foto 2026-09-20, Caja La Llorona).
+                     * Mismo criterio que ya usa "Recibio" un poco más abajo. */
                     $printer->text("Tipo: " . $movementType . "\n");
-                    $printer->text("Estación: " . $printerStationName . "\n");
+                    $printer->text("Estacion: " . $printerStationName . "\n");
                     $printer->text("Shift ID: " . $shiftId . "   Station ID: " . $stationId . "\n");
-                    $printer->text("Razón: " . $reason . "\n");
+                    $printer->text("Razon: " . $reason . "\n");
                     if ($createdAtFormatted !== '') {
                         $printer->text("Registrado: " . $createdAtFormatted . "\n");
                     }
