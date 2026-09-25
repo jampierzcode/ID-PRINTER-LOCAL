@@ -297,6 +297,12 @@ class PrinterController
      * el encabezado, el motivo y que cada producto va marcado CANCELADO. */
     private function renderComandaBody($printer, array $data, bool $esCancelacion): void
     {
+        /* Tipo 2 = antro (restaurants.tipo): cada producto sale con sus
+         * modificadores seguidos en el mismo párrafo y sin "Tiempo". Lo demás
+         * del ticket no cambia. Sin `tipo`, con tipo 1 o en una cancelación
+         * sale el ticket de siempre. */
+        $esAntro = !$esCancelacion && (int) ($data['tipo'] ?? 1) === 2;
+
         $printer->initialize();
         $printer->setJustification(Printer::JUSTIFY_CENTER);
         $printer->setTextSize(2, 2);
@@ -373,22 +379,11 @@ class PrinterController
             foreach ($mainItems as $item) {
                 $printer->text(str_repeat('-', 48) . "\n");
 
-                $courseLabel = $this->formatCourseLabel($item['course'] ?? null);
-                if ($courseLabel !== '') {
-                    $printer->text("Tiempo: " . $courseLabel . "\n");
-                }
-
-                $qty = trim((string) ($item['qty'] ?? ''));
-                $name = trim((string) ($item['name'] ?? ''));
-                $itemLine = trim(($qty !== '' ? $qty . ' ' : '') . $name);
-                if ($itemLine === '') {
-                    $itemLine = 'Producto sin nombre';
-                }
-                $printer->text($itemLine . "\n");
-
-                $notes = $item['notes'] ?? null;
-                if (!empty($notes)) {
-                    $printer->text("Nota: " . $notes . "\n");
+                if (!$esAntro) {
+                    $courseLabel = $this->formatCourseLabel($item['course'] ?? null);
+                    if ($courseLabel !== '') {
+                        $printer->text("Tiempo: " . $courseLabel . "\n");
+                    }
                 }
 
                 $compositeKey = $item['compositeProductId'] ?? '';
@@ -397,7 +392,40 @@ class PrinterController
                     $modifiers = $modifiersByCompositeId[$compositeKey] ?? [];
                 }
 
-                if (!empty($modifiers)) {
+                $qty = trim((string) ($item['qty'] ?? ''));
+                $name = trim((string) ($item['name'] ?? ''));
+                $itemLine = trim(($qty !== '' ? $qty . ($esAntro ? '-' : ' ') : '') . $name);
+                if ($itemLine === '') {
+                    $itemLine = 'Producto sin nombre';
+                }
+                if ($esAntro) {
+                    /* "1-Nombre, ** MOD **, ** MOD **": la mitad solo se
+                     * escribe cuando no es "TODO", y la nota del modificador,
+                     * si trae, va entre paréntesis para que no se pierda. */
+                    foreach ($modifiers as $modifier) {
+                        $modifierName = trim((string) ($modifier['name'] ?? ''));
+                        if ($modifierName === '') {
+                            continue;
+                        }
+                        $halfLabel = $this->formatHalfLabel($modifier['half'] ?? null);
+                        $modifierLabel = ($halfLabel !== '' && $halfLabel !== 'TODO')
+                            ? $halfLabel . ' - ' . $modifierName
+                            : $modifierName;
+                        $modifierNotes = trim((string) ($modifier['notes'] ?? ''));
+                        if ($modifierNotes !== '') {
+                            $modifierLabel .= ' (' . $modifierNotes . ')';
+                        }
+                        $itemLine .= ', ** ' . $modifierLabel . ' **';
+                    }
+                }
+                $printer->text($itemLine . "\n");
+
+                $notes = $item['notes'] ?? null;
+                if (!empty($notes)) {
+                    $printer->text("Nota: " . $notes . "\n");
+                }
+
+                if (!$esAntro && !empty($modifiers)) {
                     $printer->text("Modificadores:\n");
                     foreach ($modifiers as $modifier) {
                         $halfLabel = $this->formatHalfLabel($modifier['half'] ?? null);
